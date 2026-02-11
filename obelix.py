@@ -42,10 +42,6 @@ class OBELIX:
 
         self.reward = 0
         self.sensor_feedback = np.zeros(18)
-        # Track one-time sensor-bit rewards (per episode).
-        # Indices 0..16 correspond to sensor bits; index 17 is reserved for stuck_flag.
-        self._sensor_reward_claimed = np.zeros(17, dtype=bool)
-        self._just_enabled_push = False
         self.sensor_feedback_masks = np.zeros(
             (9, self.frame_size[0], self.frame_size[1]), np.uint8
         )
@@ -101,7 +97,7 @@ class OBELIX:
 
         self.reset(seed=seed)
 
-    def reset(self,  wall_obstacles = False, seed: Optional[int] = None):
+    def reset(self, seed: Optional[int] = None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
@@ -112,9 +108,6 @@ class OBELIX:
         self.active_state = "F"
         self.stuck_flag = 0
         self.sensor_feedback[:] = 0
-        self._sensor_reward_claimed[:] = False
-        self._just_enabled_push = False
-        self.wall_obstacles = wall_obstacles
 
         # Build obstacles first so we can avoid spawning inside/too-close to walls.
         self._build_obstacles()
@@ -155,16 +148,8 @@ class OBELIX:
             attempts += 1
             if attempts > max_attempts:
                 raise RuntimeError("Failed to sample a valid initial bot position")
-            bx = int(
-                self.rng.integers(
-                    bot_bounds_margin, self.frame_size[1] - bot_bounds_margin
-                )
-            )
-            by = int(
-                self.rng.integers(
-                    bot_bounds_margin, self.frame_size[0] - bot_bounds_margin
-                )
-            )
+            bx = int(self.rng.integers(bot_bounds_margin, self.frame_size[1] - bot_bounds_margin))
+            by = int(self.rng.integers(bot_bounds_margin, self.frame_size[0] - bot_bounds_margin))
             # Use inflated radius for clearance from obstacles.
             if clear_of_obstacles(bx, by, self.bot_radius + start_clearance):
                 self.bot_center_x = bx
@@ -178,16 +163,8 @@ class OBELIX:
             attempts += 1
             if attempts > max_attempts:
                 raise RuntimeError("Failed to sample a valid initial box position")
-            x = int(
-                self.rng.integers(
-                    box_bounds_margin, self.frame_size[1] - box_bounds_margin
-                )
-            )
-            y = int(
-                self.rng.integers(
-                    box_bounds_margin, self.frame_size[0] - box_bounds_margin
-                )
-            )
+            x = int(self.rng.integers(box_bounds_margin, self.frame_size[1] - box_bounds_margin))
+            y = int(self.rng.integers(box_bounds_margin, self.frame_size[0] - box_bounds_margin))
             if not clear_of_obstacles(x, y, box_half):
                 continue
             dx = x - self.bot_center_x
@@ -615,7 +592,6 @@ class OBELIX:
             return self.sensor_feedback, self.reward, self.done
 
         self.current_step += 1
-        self._just_enabled_push = False
 
         # Update target dynamics first (blinking/moving). If the box is attached,
         # this is a no-op and the box will move with the robot in the push logic below.
@@ -652,20 +628,17 @@ class OBELIX:
                 box_center_x_next = int(np.clip(box_center_x_t, min_x, max_x))
                 box_center_y_next = int(np.clip(box_center_y_t, min_y, max_y))
 
-                bot_in_bounds = (10 + self.bot_radius) <= bot_center_x_t <= (
-                    self.frame_size[1] - 10 - self.bot_radius
-                ) and (10 + self.bot_radius) <= bot_center_y_t <= (
-                    self.frame_size[0] - 10 - self.bot_radius
+                bot_in_bounds = (
+                    (10 + self.bot_radius)
+                    <= bot_center_x_t
+                    <= (self.frame_size[1] - 10 - self.bot_radius)
+                    and (10 + self.bot_radius)
+                    <= bot_center_y_t
+                    <= (self.frame_size[0] - 10 - self.bot_radius)
                 )
 
-                if (
-                    bot_in_bounds
-                    and (not self._would_collide(bot_center_x_t, bot_center_y_t))
-                    and (
-                        not self._box_would_collide(
-                            box_center_x_next, box_center_y_next
-                        )
-                    )
+                if bot_in_bounds and (not self._would_collide(bot_center_x_t, bot_center_y_t)) and (
+                    not self._box_would_collide(box_center_x_next, box_center_y_next)
                 ):
                     self.box_center_x = box_center_x_next
                     self.box_center_y = box_center_y_next
@@ -701,7 +674,7 @@ class OBELIX:
         if render:
             self.update_state_diagram()
 
-        if (not self.done) and (self.current_step >= 2000):
+        if (not self.done) and (self.current_step >= self.max_steps):
             self.done = True
 
         return self.sensor_feedback, self.reward, self.done
@@ -711,10 +684,8 @@ class OBELIX:
         if (self.box_visible or self.enable_push) and np.any(
             (self.bot_mask[:, :, 0] + self.box_frame[:, :, 0]) == 200
         ):
-            # Enable push on first attachment only.
-            if not self.enable_push:
-                self.reward += 1000
-                self._just_enabled_push = True
+            # self.done = True
+            self.reward += 100
             y = (
                 np.argmax((self.bot_mask[:, :, 0] + self.box_frame[:, :, 0]))
                 // self.frame_size
@@ -728,11 +699,6 @@ class OBELIX:
             self.enable_push = True
             self.box_visible = True
             self.active_state = "P"
-
-            # Per the reward table: each step in push state incurs -1.
-            # Apply it immediately on the transition into push.
-            if self._just_enabled_push:
-                self.reward += -1
 
             # print("************done*********************")
         elif np.any((self.bot_mask[:, :, 0] + self.neg_circle_frame[:, :, 0]) == 200):
@@ -748,39 +714,25 @@ class OBELIX:
         ):
             self.done = True
             self.reward += self.success_bonus
-            print("successful done")
 
         # if self.bot_center_x == self.box_center_x and self.bot_center_y==self.bot_center_y:
         #     self.done = True
         #     self.reward = 100
 
     def update_reward(self):
-        # Base per-step reward (not cumulative).
-        reward = 0.0
-
-        # One-time sensor-bit bonuses (incurred only once per episode).
-        # Bits 0..16 are sensors, bit 17 is stuck_flag.
-        sensor_bits = self.sensor_feedback[:17].astype(bool)
-
-        weights = np.zeros(17, dtype=float)
-        # Left sensors (far/near) and right sensors (far/near): +1 per bit.
-        weights[:4] = 1.0
-        weights[12:16] = 1.0
-        # Forward sensors: far bits +2, near bits +3.
-        weights[4:12][::2] = 2.0
-        weights[4:12][1::2] = 3.0
-        # Infrared sensor bit: +5.
-        weights[16] = 5.0
-
-        newly_on = sensor_bits & (~self._sensor_reward_claimed)
-        if np.any(newly_on):
-            reward += float(np.sum(weights[newly_on]))
-            self._sensor_reward_claimed |= sensor_bits
-
-        # Stuck penalty (covers wall/boundary/blocked forward cases).
-        if bool(self.sensor_feedback[17]):
-            reward += -200.0
-
-        reward += -1.0
-
-        self.reward = float(reward)
+        left_sensor_reward = np.sum(self.sensor_feedback[:4] * 1)
+        forward_far_sensor_reward = np.sum(self.sensor_feedback[4:12][::2] * 2)
+        forward_near_sensor_reward = np.sum(self.sensor_feedback[4:12][1::2] * 3)
+        right_sensor_reward = np.sum(self.sensor_feedback[12:16] * 1)
+        ir_sensor_reward = self.sensor_feedback[16] * 5
+        stuck_reward = self.sensor_feedback[17] * (-200)
+        negative_reward = np.sum(np.logical_not(self.sensor_feedback)) * -1
+        self.reward = (
+            left_sensor_reward
+            + forward_far_sensor_reward
+            + forward_near_sensor_reward
+            + right_sensor_reward
+            + ir_sensor_reward
+            + stuck_reward
+            + negative_reward
+        )

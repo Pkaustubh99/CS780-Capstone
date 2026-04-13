@@ -101,7 +101,7 @@ class OBELIX:
 
         self.reset(seed=seed)
 
-    def reset(self, seed: Optional[int] = None):
+    def reset(self,  wall_obstacles = False, seed: Optional[int] = None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
@@ -114,6 +114,7 @@ class OBELIX:
         self.sensor_feedback[:] = 0
         self._sensor_reward_claimed[:] = False
         self._just_enabled_push = False
+        self.wall_obstacles = wall_obstacles
 
         # Build obstacles first so we can avoid spawning inside/too-close to walls.
         self._build_obstacles()
@@ -700,7 +701,7 @@ class OBELIX:
         if render:
             self.update_state_diagram()
 
-        if (not self.done) and (self.current_step >= self.max_steps):
+        if (not self.done) and (self.current_step >= 2000):
             self.done = True
 
         return self.sensor_feedback, self.reward, self.done
@@ -712,7 +713,7 @@ class OBELIX:
         ):
             # Enable push on first attachment only.
             if not self.enable_push:
-                self.reward += 100
+                self.reward += 1000
                 self._just_enabled_push = True
             y = (
                 np.argmax((self.bot_mask[:, :, 0] + self.box_frame[:, :, 0]))
@@ -747,6 +748,7 @@ class OBELIX:
         ):
             self.done = True
             self.reward += self.success_bonus
+            print("successful done")
 
         # if self.bot_center_x == self.box_center_x and self.bot_center_y==self.bot_center_y:
         #     self.done = True

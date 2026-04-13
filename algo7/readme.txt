@@ -1,0 +1,4 @@
+This algorithm uses transformers with action embeddings to keep track of the current relative state of the agent with respect to its starting position.
+
+
+I want to make a further upgrade to my algorithm, i want to make use of reward obtained from my environment as part of the input i give to my policy function as well. My reasoning is is that having actions help the agent know its relative position ideally, but this can malfunction in the case of encountering a wall/ boundary, as the agent cannot move past the wall/boundry the actions taken do not actually change the state of the agent and instead might confuse the model, however if the agent know the reward, it can determine that the it has encountered an obstacle(wall/ boundary), and its action taken was meaningless
